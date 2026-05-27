@@ -88,7 +88,8 @@ object ShipWaterPocketManager {
     private const val CLIENT_WATER_SOLVE_TRANSFORM_KEY_QUANTIZATION = 16.0
     private const val CLIENT_WATER_SOLVE_LARGE_QUERY_RADIUS_CHUNKS = 12
     private const val CLIENT_WATER_SOLVE_HUGE_QUERY_RADIUS_CHUNKS = 8
-    private const val INTERSECTING_SHIPS_CACHE_SIZE = 64
+    private const val INTERSECTING_SHIPS_CACHE_SIZE = 256
+    private const val STATE_CLEANUP_FLUSH_PER_TICK_BUDGET = 32
     @Volatile
     private var applyingInternalUpdates: Boolean = false
 
@@ -182,6 +183,11 @@ object ShipWaterPocketManager {
 
     private val tmpIntersectingShipsCache: ThreadLocal<IntersectingShipsCache> =
         ThreadLocal.withInitial { IntersectingShipsCache() }
+
+    private val tmpIntersectingShipsQueryBuf: ThreadLocal<ArrayList<LoadedShip>> =
+        ThreadLocal.withInitial { ArrayList() }
+    private val tmpIntersectingShipsLocalAabb: ThreadLocal<AABBd> =
+        ThreadLocal.withInitial { AABBd() }
 
     private val tmpFloodQueue: ThreadLocal<IntArray> = ThreadLocal.withInitial { IntArray(0) }
     private val tmpFloodComponentVisited: ThreadLocal<BitSet> = ThreadLocal.withInitial { BitSet() }
@@ -2872,22 +2878,38 @@ object ShipWaterPocketManager {
             )
         }
 
-        // Cleanup unloaded ships
+        var syncFlushBudget = STATE_CLEANUP_FLUSH_PER_TICK_BUDGET
         states.entries.removeIf { entry ->
             if (loadedShipIds.contains(entry.key)) return@removeIf false
-            flushPersistedServerState(
-                level = level,
-                shipId = entry.key,
-                state = entry.value,
-                force = true,
-                nowTick = level.gameTime,
-            )
             entry.value.pendingGeometryFuture?.cancel(true)
             entry.value.pendingGeometryFuture = null
             entry.value.geometryJobInFlight = false
             entry.value.pendingWaterSolveFuture?.cancel(true)
             entry.value.pendingWaterSolveFuture = null
             entry.value.waterSolveJobInFlight = false
+            if (syncFlushBudget > 0) {
+                flushPersistedServerState(
+                    level = level,
+                    shipId = entry.key,
+                    state = entry.value,
+                    force = true,
+                    nowTick = level.gameTime,
+                )
+                syncFlushBudget--
+            } else {
+                val shipId = entry.key
+                val state = entry.value
+                val nowTick = level.gameTime
+                ShipPocketAsyncRuntime.submitPersistenceFlush {
+                    flushPersistedServerState(
+                        level = level,
+                        shipId = shipId,
+                        state = state,
+                        force = true,
+                        nowTick = nowTick,
+                    )
+                }
+            }
             true
         }
 
@@ -4014,6 +4036,8 @@ object ShipWaterPocketManager {
         worldBlockPos: BlockPos,
         queryAabb: AABBd,
     ): List<Ship> {
+        if (level.shipObjectWorld.loadedShips.isEmpty()) return emptyList()
+
         val cache = tmpIntersectingShipsCache.get()
         val tick = level.gameTime
         val posLong = worldBlockPos.asLong()
@@ -4026,17 +4050,31 @@ object ShipWaterPocketManager {
             return cache.shipsBySlot[slot]
         }
 
-        val ships = ArrayList<Ship>()
-        val localQueryAabb = AABBd()
-        for (ship in level.shipObjectWorld.loadedShips.getIntersecting(queryAabb, level.dimensionId)) {
+        val queryBuf = tmpIntersectingShipsQueryBuf.get()
+        level.shipObjectWorld.loadedShips.getIntersecting(queryAabb, level.dimensionId, queryBuf)
+        if (queryBuf.isEmpty()) {
+            cache.occupied[slot] = true
+            cache.levels[slot] = level
+            cache.ticks[slot] = tick
+            cache.worldPosLongs[slot] = posLong
+            cache.shipsBySlot[slot] = emptyList()
+            return emptyList()
+        }
+
+        val localQueryAabb = tmpIntersectingShipsLocalAabb.get()
+        var ships: ArrayList<Ship>? = null
+        for (i in queryBuf.indices) {
+            val ship = queryBuf[i]
             queryAabb.transform(ship.worldToShip, localQueryAabb)
             if (!EntityShipCollisionUtils.mayShipIntersectLocalAabb(ship, localQueryAabb)) {
                 continue
             }
-            ships.add(ship)
+            val list = ships ?: ArrayList<Ship>(queryBuf.size).also { ships = it }
+            list.add(ship)
         }
+        queryBuf.clear()
 
-        val cachedShips = if (ships.isEmpty()) emptyList() else ships
+        val cachedShips: List<Ship> = ships ?: emptyList()
         cache.occupied[slot] = true
         cache.levels[slot] = level
         cache.ticks[slot] = tick
@@ -4065,6 +4103,7 @@ object ShipWaterPocketManager {
         original: FluidState,
     ): FluidState {
         if (!VSGameConfig.COMMON.enableAirPockets) return original
+        if (level.shipObjectWorld.loadedShips.isEmpty()) return original
         if (level.isBlockInShipyard(worldX, worldY, worldZ)) return original
         val queryCache = tmpChunkQueryCache.get().apply { reset() }
 
@@ -4197,6 +4236,7 @@ object ShipWaterPocketManager {
         cache.height = null
 
         if (!enabled) return cache
+        if (level.shipObjectWorld.loadedShips.isEmpty()) return cache
         if (level.isBlockInShipyard(worldBlockPos)) return cache
         if (isWorldPosInShipAirPocket(level, worldBlockPos)) return cache
         val queryCache = tmpChunkQueryCache.get().apply { reset() }
@@ -4285,6 +4325,7 @@ object ShipWaterPocketManager {
     @JvmStatic
     fun isWorldPosInShipWorldFluidSuppressionZone(level: Level, worldX: Double, worldY: Double, worldZ: Double): Boolean {
         if (!VSGameConfig.COMMON.enableAirPockets) return false
+        if (level.shipObjectWorld.loadedShips.isEmpty()) return false
         if (level.isBlockInShipyard(worldX, worldY, worldZ)) return false
 
         val worldBlockPos = BlockPos.containing(worldX, worldY, worldZ)

@@ -19,7 +19,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.concurrent.CompletableFuture;
@@ -554,7 +553,7 @@ public final class ShipWaterPocketExternalWaterCull {
                 continue;
             }
 
-            final AABBdc worldAabb = getShipWorldAabb(ship).orElse(null);
+            final AABBdc worldAabb = getShipWorldAabb(ship);
             if (worldAabb == null) {
                 clearInteriorVolumeSlot(shader, slot);
                 continue;
@@ -672,7 +671,7 @@ public final class ShipWaterPocketExternalWaterCull {
                 continue;
             }
 
-            final AABBdc worldAabb = getShipWorldAabb(ship).orElse(null);
+            final AABBdc worldAabb = getShipWorldAabb(ship);
             if (worldAabb == null) {
                 clearInteriorVolumeSlot(effect, slot);
                 continue;
@@ -1217,21 +1216,68 @@ public final class ShipWaterPocketExternalWaterCull {
         }
     }
 
+    private static LoadedShip[] vs$selectScratchShips = new LoadedShip[64];
+    private static double[] vs$selectScratchDists = new double[64];
+    private static final LoadedShip[] vs$selectTopK = new LoadedShip[MAX_SHIPS];
+    private static final double[] vs$selectTopKDists = new double[MAX_SHIPS];
+
     private static List<LoadedShip> selectClosestShips(final ClientLevel level, final Vec3 cameraPos, final int maxCount) {
-        final List<LoadedShip> candidates = new ArrayList<>();
-        for (final LoadedShip ship : VSGameUtilsKt.getShipObjectWorld(level).getLoadedShips()) {
-            candidates.add(ship);
+        final int cap = Math.min(maxCount, MAX_SHIPS);
+        if (cap <= 0) return java.util.Collections.emptyList();
+
+        final Iterable<? extends LoadedShip> loadedShips = VSGameUtilsKt.getShipObjectWorld(level).getLoadedShips();
+        int n = 0;
+        LoadedShip[] scratch = vs$selectScratchShips;
+        for (final LoadedShip ship : loadedShips) {
+            if (n == scratch.length) {
+                scratch = Arrays.copyOf(scratch, scratch.length * 2);
+                vs$selectScratchShips = scratch;
+            }
+            scratch[n++] = ship;
+        }
+        if (n == 0) return java.util.Collections.emptyList();
+
+        double[] dists = vs$selectScratchDists;
+        if (dists.length < n) {
+            dists = new double[Math.max(n, dists.length * 2)];
+            vs$selectScratchDists = dists;
+        }
+        for (int i = 0; i < n; i++) {
+            dists[i] = distanceSqToShipAabb(cameraPos, scratch[i]);
         }
 
-        candidates.sort(Comparator.comparingDouble(ship -> distanceSqToShipAabb(cameraPos, ship)));
-        if (candidates.size() > maxCount) {
-            return candidates.subList(0, maxCount);
+        final LoadedShip[] topShips = vs$selectTopK;
+        final double[] topDists = vs$selectTopKDists;
+        int filled = 0;
+        double worstKept = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < n; i++) {
+            final double d = dists[i];
+            if (filled == cap && d >= worstKept) continue;
+            int pos = filled;
+            while (pos > 0 && topDists[pos - 1] > d) pos--;
+            final int last = (filled == cap) ? cap - 1 : filled;
+            for (int j = last; j > pos; j--) {
+                topShips[j] = topShips[j - 1];
+                topDists[j] = topDists[j - 1];
+            }
+            topShips[pos] = scratch[i];
+            topDists[pos] = d;
+            if (filled < cap) filled++;
+            worstKept = topDists[filled - 1];
         }
-        return candidates;
+
+        for (int i = 0; i < n; i++) scratch[i] = null;
+
+        final ArrayList<LoadedShip> result = new ArrayList<>(filled);
+        for (int i = 0; i < filled; i++) {
+            result.add(topShips[i]);
+            topShips[i] = null;
+        }
+        return result;
     }
 
     private static double distanceSqToShipAabb(final Vec3 cameraPos, final LoadedShip ship) {
-        final AABBdc shipWorldAabbDc = getShipWorldAabb(ship).orElse(null);
+        final AABBdc shipWorldAabbDc = getShipWorldAabb(ship);
         if (shipWorldAabbDc == null) return Double.POSITIVE_INFINITY;
 
         final double closestX = Mth.clamp(cameraPos.x, shipWorldAabbDc.minX(), shipWorldAabbDc.maxX());
@@ -1243,11 +1289,11 @@ public final class ShipWaterPocketExternalWaterCull {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    private static Optional<AABBdc> getShipWorldAabb(final LoadedShip ship) {
+    private static AABBdc getShipWorldAabb(final LoadedShip ship) {
         if (ship instanceof final ClientShip clientShip) {
-            return Optional.ofNullable(clientShip.getRenderAABB());
+            return clientShip.getRenderAABB();
         }
-        return Optional.ofNullable(ship.getWorldAABB());
+        return ship.getWorldAABB();
     }
 
     private static ShipTransform getShipTransform(final LoadedShip ship) {
@@ -1270,7 +1316,7 @@ public final class ShipWaterPocketExternalWaterCull {
             final LoadedShip ship = ships.get(slot);
             final long shipId = ship.getId();
 
-            final AABBdc shipWorldAabbDc = getShipWorldAabb(ship).orElse(null);
+            final AABBdc shipWorldAabbDc = getShipWorldAabb(ship);
             if (shipWorldAabbDc == null) {
                 disableShipSlot(slot);
                 continue;
@@ -1376,7 +1422,7 @@ public final class ShipWaterPocketExternalWaterCull {
             final LoadedShip ship = ships.get(slot);
             final long shipId = ship.getId();
 
-            final AABBdc shipWorldAabbDc = getShipWorldAabb(ship).orElse(null);
+            final AABBdc shipWorldAabbDc = getShipWorldAabb(ship);
             if (shipWorldAabbDc == null) {
                 disableShipSlotProgram(handles, slot);
                 continue;

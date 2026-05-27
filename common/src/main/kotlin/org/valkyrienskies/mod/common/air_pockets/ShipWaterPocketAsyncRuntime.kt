@@ -113,4 +113,9 @@ internal object ShipPocketAsyncRuntime {
     ): CompletableFuture<T>? {
         return trySubmit(subsystem = subsystem, task = { supplier.get() })
     }
+
+    @JvmStatic
+    fun submitPersistenceFlush(task: Runnable) {
+        executor.execute(task)
+    }
 }

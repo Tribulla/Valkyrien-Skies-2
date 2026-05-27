@@ -1,7 +1,6 @@
 package org.valkyrienskies.mod.common.util
 
 import net.minecraft.client.multiplayer.ClientLevel
-import net.minecraft.core.SectionPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.Mth
 import net.minecraft.core.Direction
@@ -15,21 +14,19 @@ import net.minecraft.world.phys.shapes.VoxelShape
 import org.joml.Vector3d
 import org.joml.primitives.AABBd
 import org.joml.primitives.AABBdc
-import org.joml.primitives.AABBi
+import org.valkyrienskies.core.api.ships.LoadedShip
 import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.core.internal.collision.VsiConvexPolygonc
 import org.valkyrienskies.core.util.extend
-import org.valkyrienskies.core.util.toAABBd
 import org.valkyrienskies.core.api.ships.properties.ShipId
+import org.valkyrienskies.mod.common.allShips
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
-import org.valkyrienskies.mod.common.unloadedShips
 import org.valkyrienskies.mod.common.vsCore
 import org.valkyrienskies.mod.mixinducks.feature.tickets.PlayerKnownShipsDuck
 import org.valkyrienskies.mod.util.BugFixUtil
 import java.util.concurrent.ConcurrentHashMap
-import java.util.stream.Stream
 
 object EntityShipCollisionUtils {
 
@@ -88,29 +85,46 @@ object EntityShipCollisionUtils {
 
     private val collider = vsCore.entityPolygonCollider
 
-    private fun getShipyardChunkAABBAround(ship: Ship): AABBi {
-        val box = AABBi()
-        // Since we don't know how big the ship is vertically we'll just have to trust the shipAABB and add some margin of error.
-        val minY = (ship.shipAABB?.minY() ?: Mth.floor(ship.transform.position.y())) - 16
-        val maxY = (ship.shipAABB?.maxY() ?: Mth.ceil(ship.transform.position.y())) + 16
-        ship.activeChunksSet.forEach { x, z ->
-            val minX = SectionPos.sectionToBlockCoord(x)
-            val minZ = SectionPos.sectionToBlockCoord(z)
-            val maxX = SectionPos.sectionToBlockCoord(x, 15)
-            val maxZ = SectionPos.sectionToBlockCoord(z, 15)
-            box.union(minX, minY, minZ).union(maxX, maxY, maxZ)
+    private val tlEntityAabb: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+    private val tlEntityAabbInShip: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+    private val tlShipQueryBuf: ThreadLocal<ArrayList<Ship>> = ThreadLocal.withInitial { ArrayList() }
+    private val tlInflatedQueryAabb: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+
+    private const val UNLOADED_SHIP_QUERY_INFLATION = 1.0
+
+    private fun fillAllShipsIntersectingEvenIfNotYetFullyLoaded(level: Level, aabb: AABBd, out: MutableList<Ship>) {
+        out.clear()
+        val shipObjectWorld = level.shipObjectWorld
+        if (shipObjectWorld.allShips.isEmpty()) return
+
+        val inflated = tlInflatedQueryAabb.get()
+            .setMin(
+                aabb.minX - UNLOADED_SHIP_QUERY_INFLATION,
+                aabb.minY - UNLOADED_SHIP_QUERY_INFLATION,
+                aabb.minZ - UNLOADED_SHIP_QUERY_INFLATION,
+            )
+            .setMax(
+                aabb.maxX + UNLOADED_SHIP_QUERY_INFLATION,
+                aabb.maxY + UNLOADED_SHIP_QUERY_INFLATION,
+                aabb.maxZ + UNLOADED_SHIP_QUERY_INFLATION,
+            )
+
+        val loadedBuf = tlLoadedQueryBuf.get()
+        shipObjectWorld.loadedShips.getIntersecting(inflated, level.dimensionId, loadedBuf)
+        for (i in loadedBuf.indices) out.add(loadedBuf[i])
+        loadedBuf.clear()
+
+        val unloaded = shipObjectWorld.unloadedShips
+        if (!unloaded.isEmpty()) {
+            val tail = tlUnloadedQueryBuf.get()
+            unloaded.getIntersecting(inflated, level.dimensionId, tail)
+            for (i in tail.indices) out.add(tail[i])
+            tail.clear()
         }
-        return box
     }
 
-    private fun getAllShipsIntersectingEvenIfNotYetFullyLoaded(level: Level, aabb: AABBd): Stream<Ship> {
-        // shipAABB and worldAABB are sometimes too small when ship was just loaded for the first time.
-        // To circumvent this, we use activeChunksSet to find a rougher bounding box which should always contain the entire ship.
-        return level.unloadedShips.stream().filter { ship ->
-            ship.chunkClaimDimension == level.dimensionId &&
-            getShipyardChunkAABBAround(ship).toAABBd(AABBd()).transform(ship.shipToWorld).intersectsAABB(aabb)
-        }
-    }
+    private val tlLoadedQueryBuf: ThreadLocal<ArrayList<LoadedShip>> = ThreadLocal.withInitial { ArrayList() }
+    private val tlUnloadedQueryBuf: ThreadLocal<ArrayList<Ship>> = ThreadLocal.withInitial { ArrayList() }
 
     @JvmStatic
     fun isCollidingWithUnloadedShips(entity: Entity): Boolean {
@@ -122,35 +136,47 @@ object EntityShipCollisionUtils {
             } else if (entity is Player) {
                 playerClientSyncBlockStartTicks.remove(entity.id)
             }
-            if (level.unloadedShips.isEmpty()) {
+
+            if (level.shipObjectWorld.allShips.isEmpty()) {
                 return false
             }
 
-            val aabb = entity.boundingBox.toJOML()
+            val ebb = entity.boundingBox
+            val aabb = tlEntityAabb.get().setMin(ebb.minX, ebb.minY, ebb.minZ).setMax(ebb.maxX, ebb.maxY, ebb.maxZ)
             val currentTick = level.gameTime
-            return getAllShipsIntersectingEvenIfNotYetFullyLoaded(level, aabb)
-                .allMatch { ship ->
-                    // Skip collision check for recently-spawned ships whose chunks are still
-                    // loading. Without this, spawning a new ship near a player would freeze
-                    // them because isCollidingWithUnloadedShips returns true (the new ship's
-                    // chunks haven't loaded yet), which cancels all entity movement.
-                    // This must be checked BEFORE vs_isKnownShip, because the player won't
-                    // know about a brand-new ship yet either.
-                    if (isInSpawnGracePeriod(ship.id)) {
-                        return@allMatch true // pretend it's loaded → don't block movement
-                    }
-                    val aabbInShip = AABBd(aabb).transform(ship.worldToShip)
-                    val chunksLoaded = areAllChunksLoaded(ship, aabbInShip, level)
-                    if (chunksLoaded) {
-                        playerUnloadedShipBlockStartTicks.remove(playerShipBlockKey(entity, ship.id))
-                        return@allMatch true
-                    }
-                    if (entity is PlayerKnownShipsDuck && !entity.vs_isKnownShip(ship.id)) {
-                        return@allMatch !shouldBlockPlayerForUnloadedShip(entity, ship, currentTick)
-                    }
-                    !shouldBlockPlayerForUnloadedShip(entity, ship, currentTick)
+            val candidateShips = tlShipQueryBuf.get()
+            fillAllShipsIntersectingEvenIfNotYetFullyLoaded(level, aabb, candidateShips)
+            if (candidateShips.isEmpty()) {
+                return false
+            }
+
+            val aabbInShip = tlEntityAabbInShip.get()
+            var collidingWithUnloaded = false
+            for (i in candidateShips.indices) {
+                val ship = candidateShips[i]
+                if (isInSpawnGracePeriod(ship.id)) {
+                    continue
                 }
-                .not()
+                aabbInShip.setMin(aabb.minX, aabb.minY, aabb.minZ).setMax(aabb.maxX, aabb.maxY, aabb.maxZ).transform(ship.worldToShip)
+                val chunksLoaded = areAllChunksLoaded(ship, aabbInShip, level)
+                if (chunksLoaded) {
+                    playerUnloadedShipBlockStartTicks.remove(playerShipBlockKey(entity, ship.id))
+                    continue
+                }
+                if (entity is PlayerKnownShipsDuck && !entity.vs_isKnownShip(ship.id)) {
+                    if (shouldBlockPlayerForUnloadedShip(entity, ship, currentTick)) {
+                        collidingWithUnloaded = true
+                        break
+                    }
+                    continue
+                }
+                if (shouldBlockPlayerForUnloadedShip(entity, ship, currentTick)) {
+                    collidingWithUnloaded = true
+                    break
+                }
+            }
+            candidateShips.clear()
+            return collidingWithUnloaded
         }
 
         return false

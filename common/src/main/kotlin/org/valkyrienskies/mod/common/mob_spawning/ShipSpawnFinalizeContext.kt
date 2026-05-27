@@ -1,6 +1,7 @@
 package org.valkyrienskies.mod.common.mob_spawning
 
 import org.valkyrienskies.core.api.ships.Ship
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Thread-local stack of the ship whose mob is currently being finalized, pushed around the
@@ -10,21 +11,28 @@ import org.valkyrienskies.core.api.ships.Ship
  * On Fabric the mixins wrap the `Mob.finalizeSpawn` invoke; on Forge that invoke is
  * binpatched to `ForgeEventFactory.onFinalizeSpawn` and the forge-module mixins wrap that
  * instead (except BaseSpawner, which keeps the vanilla call on both loaders).
+ *
  */
 object ShipSpawnFinalizeContext {
 
     private val STACK: ThreadLocal<ArrayDeque<Ship?>> = ThreadLocal.withInitial { ArrayDeque() }
+    private val activeCount = AtomicInteger(0)
 
     @JvmStatic
     fun push(ship: Ship?) {
         STACK.get().addLast(ship)
+        activeCount.incrementAndGet()
     }
 
     @JvmStatic
     fun pop() {
         STACK.get().removeLast()
+        activeCount.decrementAndGet()
     }
 
     @JvmStatic
     fun current(): Ship? = STACK.get().lastOrNull()
+
+    @JvmStatic
+    fun hasAnyActive(): Boolean = activeCount.get() != 0
 }

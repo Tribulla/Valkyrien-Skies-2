@@ -241,19 +241,31 @@ private fun getShipObjectManagingPosImpl(world: Level?, chunkX: Int, chunkZ: Int
     return null
 }
 
+private val tlTransformFromWorldAabb: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+private val tlTransformFromWorldShipsBuf: ThreadLocal<ArrayList<Ship>> = ThreadLocal.withInitial { ArrayList() }
+
 /**
  * Get all ships intersecting an AABB in world-space, then call [cb] with the AABB itself,
  * followed by the AABB in the ship-space of the intersecting ships.
  */
 fun Level.transformFromWorldToNearbyShipsAndWorld(aabb: AABB, cb: Consumer<AABB>) {
-    val tmpAABB = AABBd()
     cb.accept(aabb)
-    getShipsIntersecting(aabb).forEach { ship ->
-        tmpAABB.set(aabb).transform(ship.worldToShip)
+    if (shipObjectWorld == null || allShips.isEmpty()) return
+
+    val shipsBuf = tlTransformFromWorldShipsBuf.get()
+    val srcAabb = tlTransformFromWorldAabb.get().set(aabb)
+    getShipsIntersecting(srcAabb, shipsBuf)
+    if (shipsBuf.isEmpty()) return
+
+    val tmpAABB = AABBd()
+    for (i in shipsBuf.indices) {
+        val ship = shipsBuf[i]
+        tmpAABB.set(srcAabb).transform(ship.worldToShip)
         if (EntityShipCollisionUtils.mayShipIntersectLocalAabb(ship, tmpAABB)) {
             cb.accept(tmpAABB.toMinecraft())
         }
     }
+    shipsBuf.clear()
 }
 
 /**
@@ -262,14 +274,21 @@ fun Level.transformFromWorldToNearbyShipsAndWorld(aabb: AABB, cb: Consumer<AABB>
  * Not sure if this is actually useful, but our MixinEntity for water-flowing on ships seems to need it.
  */
 fun Level.transformFromWorldToNearbyShips(aabb: AABB, cb: Consumer<AABB>) {
+    if (shipObjectWorld == null || allShips.isEmpty()) return
+    val shipsBuf = tlTransformFromWorldShipsBuf.get()
+    val srcAabb = tlTransformFromWorldAabb.get().set(aabb)
+    getShipsIntersecting(srcAabb, shipsBuf)
+    if (shipsBuf.isEmpty()) return
+
     val tmpAABB = AABBd()
-    //cb.accept(aabb)
-    getShipsIntersecting(aabb).forEach { ship ->
-        tmpAABB.set(aabb).transform(ship.worldToShip)
+    for (i in shipsBuf.indices) {
+        val ship = shipsBuf[i]
+        tmpAABB.set(srcAabb).transform(ship.worldToShip)
         if (EntityShipCollisionUtils.mayShipIntersectLocalAabb(ship, tmpAABB)) {
             cb.accept(tmpAABB.toMinecraft())
         }
     }
+    shipsBuf.clear()
 }
 
 fun Level?.transformToNearbyShipsAndWorld(x: Double, y: Double, z: Double, aabbRadius: Double): List<Vector3d> {
@@ -286,26 +305,44 @@ fun Level?.transformToNearbyShipsAndWorld(
     this?.transformToNearbyShipsAndWorld(x, y, z, aabbRadius, cb::accept)
 }
 
+@PublishedApi internal val tlTransformNearbyAabb: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+@PublishedApi internal val tlTransformNearbyPos: ThreadLocal<Vector3d> = ThreadLocal.withInitial { Vector3d() }
+@PublishedApi internal val tlTransformNearbyTmp: ThreadLocal<Vector3d> = ThreadLocal.withInitial { Vector3d() }
+@PublishedApi internal val tlTransformNearbyShipBuf: ThreadLocal<ArrayList<Ship>> = ThreadLocal.withInitial { ArrayList() }
+
 inline fun Level.transformToNearbyShipsAndWorld(
     x: Double, y: Double, z: Double, aabbRadius: Double, cb: (Double, Double, Double) -> Unit
 ) {
     val currentShip = getShipManagingPos(x, y, z)
-    val aabb = AABBd(x, y, z, x, y, z).expand(aabbRadius)
+    if (allShips.isEmpty()) {
+        if (currentShip != null) {
+            val posInWorld = Vector3d(x, y, z)
+            currentShip.shipToWorld.transformPosition(posInWorld)
+            cb(posInWorld.x(), posInWorld.y(), posInWorld.z())
+        }
+        return
+    }
 
-    val posInWorld = Vector3d(x, y, z)
-    val temp0 = Vector3d()
+    val aabb = tlTransformNearbyAabb.get()
+        .setMin(x - aabbRadius, y - aabbRadius, z - aabbRadius)
+        .setMax(x + aabbRadius, y + aabbRadius, z + aabbRadius)
+    val posInWorld = tlTransformNearbyPos.get().set(x, y, z)
+    val temp0 = tlTransformNearbyTmp.get()
 
     if (currentShip != null) {
         currentShip.shipToWorld.transformPosition(posInWorld)
-
         cb(posInWorld.x(), posInWorld.y(), posInWorld.z())
     }
 
-    for (nearbyShip in shipObjectWorld.allShips.getIntersecting(aabb, this!!.dimensionId)) {
+    val shipBuf = tlTransformNearbyShipBuf.get()
+    shipObjectWorld.allShips.getIntersecting(aabb, this.dimensionId, shipBuf)
+    for (i in shipBuf.indices) {
+        val nearbyShip = shipBuf[i]
         if (nearbyShip.id == currentShip?.id) continue
         val posInShip = nearbyShip.worldToShip.transformPosition(posInWorld, temp0)
         cb(posInShip.x(), posInShip.y(), posInShip.z())
     }
+    shipBuf.clear()
 }
 
 // Level
@@ -717,6 +754,9 @@ fun Level?.getWorldCoordinates(blockPos: BlockPos, pos: Vector3d): Vector3d {
 
 fun Level.getShipsIntersecting(aabb: AABB): Iterable<Ship> = getShipsIntersecting(aabb.toJOML())
 fun Level.getShipsIntersecting(aabb: AABBdc): Iterable<Ship> = allShips.getIntersecting(aabb, dimensionId)
+
+fun Level.getShipsIntersecting(aabb: AABBdc, out: MutableList<Ship>): MutableList<Ship> =
+    allShips.getIntersecting(aabb, dimensionId, out)
 fun Level?.transformAabbToWorld(aabb: AABB): AABB = transformAabbToWorld(aabb.toJOML()).toMinecraft()
 fun Level?.transformAabbToWorld(aabb: AABBd) = this?.transformAabbToWorld(aabb, aabb) ?: aabb
 fun Level?.transformAabbToWorld(aabb: AABBdc, dest: AABBd): AABBd {

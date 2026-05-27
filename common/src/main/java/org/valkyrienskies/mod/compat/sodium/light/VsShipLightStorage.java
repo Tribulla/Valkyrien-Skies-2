@@ -221,6 +221,7 @@ public class VsShipLightStorage {
      * payload contains a one-block border copied from its neighbors.
      */
     public void invalidateSection(long sectionPos) {
+        if (section2Index.isEmpty()) return;
         int sx = SectionPos.x(sectionPos);
         int sy = SectionPos.y(sectionPos);
         int sz = SectionPos.z(sectionPos);
@@ -422,13 +423,28 @@ public class VsShipLightStorage {
         long solidPtr = ptr + SOLID_START_BYTES;
         long lightPtr = ptr + LIGHT_START_BYTES;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+
+        int lastCx = Integer.MIN_VALUE;
+        int lastCz = Integer.MIN_VALUE;
+        net.minecraft.world.level.chunk.ChunkAccess lastChunk = null;
+
         int acc = 0;
         int bitIdx = 0;
         for (int y = -1; y < 17; y++) {
+            int wy = yMin + y;
             for (int z = -1; z < 17; z++) {
+                int wz = zMin + z;
+                int cz = wz >> 4;
                 for (int x = -1; x < 17; x++) {
-                    pos.set(xMin + x, yMin + y, zMin + z);
-                    BlockState state = level.getBlockState(pos);
+                    int wx = xMin + x;
+                    int cx = wx >> 4;
+                    if (cx != lastCx || cz != lastCz || lastChunk == null) {
+                        lastChunk = level.getChunk(cx, cz, net.minecraft.world.level.chunk.ChunkStatus.FULL, false);
+                        lastCx = cx;
+                        lastCz = cz;
+                    }
+                    pos.set(wx, wy, wz);
+                    final BlockState state = (lastChunk != null) ? lastChunk.getBlockState(pos) : level.getBlockState(pos);
                     if (state.canOcclude() && Block.isShapeFullBlock(state.getOcclusionShape(level, pos))) {
                         acc |= 1 << (bitIdx & 31);
                     }

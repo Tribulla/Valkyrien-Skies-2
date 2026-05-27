@@ -66,6 +66,12 @@ public abstract class MixinRenderSectionManager implements RenderSectionManagerD
     @Unique
     private int vs$lastShipRenderListFrame = Integer.MIN_VALUE;
 
+    @Unique
+    private final ArrayList<RenderSection> vs$rebuildSortScratch = new ArrayList<>(256);
+
+    @Unique
+    private final AABBd vs$tempVisibilityAabb = new AABBd();
+
     @Override
     public WeakHashMap<ClientShip, SortedRenderLists> vs_getShipRenderLists() {
         return shipRenderLists;
@@ -120,6 +126,7 @@ public abstract class MixinRenderSectionManager implements RenderSectionManagerD
             shipRenderLists.clear();
             boolean mergedRebuilds = false;
 
+            final AABBd tempAabb = this.vs$tempVisibilityAabb;
             for (final ClientShip ship : loadedShips) {
                 final AABBdc shipAabb = ship.getRenderAABB();
                 if (shipAabb == null || !vs$isAabbVisible(viewport, shipAabb)) {
@@ -128,7 +135,6 @@ public abstract class MixinRenderSectionManager implements RenderSectionManagerD
 
                 final VisibleChunkCollector collector = new VisibleChunkCollector(frame);
                 final Matrix4dc shipToWorld = ship.getRenderTransform().getShipToWorld();
-                final AABBd tempAabb = new AABBd();
                 int visibleSectionCount = 0;
 
                 for (final ShipSectionCandidate candidate : this.vs$getShipSectionCache(ship, frame).sections) {
@@ -159,14 +165,19 @@ public abstract class MixinRenderSectionManager implements RenderSectionManagerD
                 }
             }
             if (mergedRebuilds) {
+                final net.minecraft.core.BlockPos cameraBlockPos = camera.getBlockPosition();
+                final ArrayList<RenderSection> sortScratch = this.vs$rebuildSortScratch;
                 this.rebuildLists.forEach(
                     (type, rebuildLists) -> {
-                        final List<RenderSection> rebuildSorted = new ArrayList<>(rebuildLists);
-                        rebuildSorted.sort(Comparator.comparingDouble(section -> section.getSquaredDistance(camera.getBlockPosition())));
+                        if (rebuildLists.size() <= 1) return;
+                        sortScratch.clear();
+                        sortScratch.addAll(rebuildLists);
+                        sortScratch.sort(Comparator.comparingDouble(section -> section.getSquaredDistance(cameraBlockPos)));
                         rebuildLists.clear();
-                        rebuildLists.addAll(rebuildSorted);
+                        rebuildLists.addAll(sortScratch);
                     }
                 );
+                sortScratch.clear();
             }
 
             this.vs$shipRenderListsDirty = false;

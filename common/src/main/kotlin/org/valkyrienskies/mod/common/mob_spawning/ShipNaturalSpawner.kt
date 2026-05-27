@@ -25,6 +25,7 @@ import org.joml.primitives.AABBd
 import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.mod.common.config.VSGameConfig
 import org.valkyrienskies.mod.common.getShipsIntersecting
+import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.mixin.accessors.world.level.NaturalSpawnerInvoker
 import org.valkyrienskies.mod.mixin.accessors.world.level.NaturalSpawnerSpawnStateInvoker
 
@@ -41,6 +42,13 @@ object ShipNaturalSpawner {
     private val SPAWN_CATEGORIES: Array<MobCategory> =
         MobCategory.values().filter { it != MobCategory.MISC }.toTypedArray()
 
+    private val tlColumn: ThreadLocal<AABBd> = ThreadLocal.withInitial { AABBd() }
+    private val tlShipBuf: ThreadLocal<ArrayList<org.valkyrienskies.core.api.ships.Ship>> =
+        ThreadLocal.withInitial { ArrayList() }
+    private val tlSeedScratch: ThreadLocal<Vector3d> = ThreadLocal.withInitial { Vector3d() }
+    private val tlRenderedScratch: ThreadLocal<Vector3d> = ThreadLocal.withInitial { Vector3d() }
+    private val tlDistanceScratch: ThreadLocal<Vector3d> = ThreadLocal.withInitial { Vector3d() }
+
     @JvmStatic
     fun spawnForShipsIn(
         level: ServerLevel,
@@ -51,25 +59,32 @@ object ShipNaturalSpawner {
         spawnPassive: Boolean
     ) {
         if (!VSGameConfig.SERVER.allowMobSpawns) return
+        if (level.shipObjectWorld.loadedShips.isEmpty()) return
 
         val chunkPos = chunk.pos
-        val column = AABBd(
-            chunkPos.minBlockX.toDouble(),
-            level.minBuildHeight.toDouble(),
-            chunkPos.minBlockZ.toDouble(),
-            chunkPos.maxBlockX + 1.0,
-            level.maxBuildHeight.toDouble(),
-            chunkPos.maxBlockZ + 1.0
-        )
+        val column = tlColumn.get().apply {
+            minX = chunkPos.minBlockX.toDouble()
+            minY = level.minBuildHeight.toDouble()
+            minZ = chunkPos.minBlockZ.toDouble()
+            maxX = chunkPos.maxBlockX + 1.0
+            maxY = level.maxBuildHeight.toDouble()
+            maxZ = chunkPos.maxBlockZ + 1.0
+        }
+
+        val shipBuf = tlShipBuf.get()
+        level.getShipsIntersecting(column, shipBuf)
+        if (shipBuf.isEmpty()) return
 
         val invoker = spawnState as NaturalSpawnerSpawnStateInvoker
-        for (ship in level.getShipsIntersecting(column)) {
+        for (i in shipBuf.indices) {
+            val ship = shipBuf[i]
             for (category in SPAWN_CATEGORIES) {
                 if (!categoryGate(category, spawnFriendlies, spawnMonsters, spawnPassive)) continue
                 if (!invoker.`vs$canSpawnForCategory`(category, chunk.pos)) continue
                 trySpawnOnShip(category, ship, level, chunk, spawnState)
             }
         }
+        shipBuf.clear()
     }
 
     private fun categoryGate(
@@ -93,11 +108,15 @@ object ShipNaturalSpawner {
         val shipAABB = ship.shipAABB
         if (shipAABB == null || !shipAABB.isValid) return
 
+        val shipTransform = ship.transform
+        val worldToShipMat = shipTransform.worldToShip
+        val shipToWorldMat = shipTransform.shipToWorld
+
         val worldX0 = chunk.pos.minBlockX + random.nextInt(16)
         val worldZ0 = chunk.pos.minBlockZ + random.nextInt(16)
         val midY = (shipAABB.minY() + shipAABB.maxY()) / 2.0
-        val shipyardSeed = ship.transform.worldToShip.transformPosition(
-            worldX0 + 0.5, midY, worldZ0 + 0.5, Vector3d()
+        val shipyardSeed = worldToShipMat.transformPosition(
+            worldX0 + 0.5, midY, worldZ0 + 0.5, tlSeedScratch.get()
         )
         val shipyardX = Math.floor(shipyardSeed.x).toInt()
         val shipyardZ = Math.floor(shipyardSeed.z).toInt()
@@ -147,7 +166,7 @@ object ShipNaturalSpawner {
 
                     // Project shipyard pos -> world for structure resolution AND difficulty
                     // (so DifficultyInstance reflects the ship's render location, not shipyard-zero inhabited time).
-                    val rendered = ship.transform.shipToWorld.transformPosition(cx, cy, cz, Vector3d())
+                    val rendered = shipToWorldMat.transformPosition(cx, cy, cz, tlRenderedScratch.get())
                     val worldPos = BlockPos.containing(rendered.x, rendered.y, rendered.z)
 
                     val player = level.getNearestPlayer(cx, cy, cz, -1.0, false) ?: continue@groupLoop
@@ -254,10 +273,15 @@ object ShipNaturalSpawner {
     ): Boolean {
         if (distSqr <= 576.0) return false
         val worldRendered = ship.transform.shipToWorld.transformPosition(
-            pos.x + 0.5, pos.y.toDouble(), pos.z + 0.5, Vector3d()
+            pos.x + 0.5, pos.y.toDouble(), pos.z + 0.5, tlDistanceScratch.get()
         )
-        val renderedVec = Vec3(worldRendered.x, worldRendered.y, worldRendered.z)
-        if (level.sharedSpawnPos.closerToCenterThan(renderedVec, 24.0)) return false
+        val sx = level.sharedSpawnPos.x + 0.5
+        val sy = level.sharedSpawnPos.y + 0.5
+        val sz = level.sharedSpawnPos.z + 0.5
+        val dx = worldRendered.x - sx
+        val dy = worldRendered.y - sy
+        val dz = worldRendered.z - sz
+        if (dx * dx + dy * dy + dz * dz < 24.0 * 24.0) return false
         return true
     }
 }

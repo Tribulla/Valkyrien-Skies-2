@@ -9,13 +9,18 @@ public final class ShipFinalizeBiome {
     private ShipFinalizeBiome() {
     }
 
+    private static final ThreadLocal<Vector3d> TL_SCRATCH = ThreadLocal.withInitial(Vector3d::new);
+
     public static BlockPos project(final BlockPos pos) {
+        if (!ShipSpawnFinalizeContext.hasAnyActive()) {
+            return pos;
+        }
         final Ship ship = ShipSpawnFinalizeContext.current();
         if (ship == null) {
             return pos;
         }
         final Vector3d world = ship.getTransform().getShipToWorld().transformPosition(
-            pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, new Vector3d()
+            pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, TL_SCRATCH.get()
         );
         return BlockPos.containing(world.x, world.y, world.z);
     }

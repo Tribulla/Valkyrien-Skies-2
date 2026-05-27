@@ -28,6 +28,7 @@ import org.valkyrienskies.core.game.ships.ShipObjectClient
 import org.valkyrienskies.core.util.expand
 import org.valkyrienskies.mod.common.getShipsIntersecting
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.common.util.set
 import org.valkyrienskies.mod.common.util.toJOML
 import org.valkyrienskies.mod.common.util.toMinecraft
 import org.valkyrienskies.mod.util.scale
@@ -37,6 +38,21 @@ import java.util.function.Function
 import java.util.function.Predicate
 
 private val logger = LogManager.getLogger("RaycastUtilsKt")
+
+private val tmpClipScratch: ThreadLocal<ClipScratch> = ThreadLocal.withInitial { ClipScratch() }
+
+private class ClipScratch {
+    val clipAabb = AABBd()
+    val expandedAabb = AABBd()
+    val chopParam = Vector2d()
+    val fromJoml = Vector3d()
+    val toJoml = Vector3d()
+    val shipStartV = Vector3d()
+    val shipEndV = Vector3d()
+    val shipHitV = Vector3d()
+    // Reusable ship-query buffer so we don't allocate a fresh ArrayList per raycast.
+    val shipBuf: ArrayList<Ship> = ArrayList()
+}
 
 @JvmOverloads
 fun Level.clipIncludeShips(
@@ -59,53 +75,48 @@ fun Level.clipIncludeShips(
     var closestHitPos = vanillaHit.location
     var closestHitDist = closestHitPos.distanceToSqr(ctx.from)
 
-    val clipAABB: AABBdc = AABBd(ctx.from.toJOML(), ctx.to.toJOML()).correctBounds()
-    val clipSegment = LineSegmentf(ctx.from.toVector3f(), ctx.to.toVector3f())
+    val scratch = tmpClipScratch.get()
+    val fromV = scratch.fromJoml.set(ctx.from.x, ctx.from.y, ctx.from.z)
+    val toV = scratch.toJoml.set(ctx.to.x, ctx.to.y, ctx.to.z)
+    val clipAABB: AABBdc = scratch.clipAabb.setMin(fromV).setMax(fromV).union(toV).correctBounds()
+    val clipSegment = LineSegmentf(
+        ctx.from.x.toFloat(), ctx.from.y.toFloat(), ctx.from.z.toFloat(),
+        ctx.to.x.toFloat(), ctx.to.y.toFloat(), ctx.to.z.toFloat()
+    )
 
     // Iterate every ship, find do the raycast in ship space,
     // choose the raycast with the lowest distance to the start position.
-    for (ship in getShipsIntersecting(clipAABB)) {
-        val chopParam = Vector2d()
-        // Pad AABB size to increase raycast tolerance
-        val expandedAABB = AABBd(ship.worldAABB).expand(1.0)
-        val intersectType = expandedAABB.intersectsLineSegment(clipSegment, chopParam);
-        if (intersectType == Intersectionf.OUTSIDE) {
-            continue
-        }
-        // Skip skipShip
+    val shipBuf = scratch.shipBuf
+    getShipsIntersecting(clipAABB, shipBuf)
+    for (i in shipBuf.indices) {
+        val ship = shipBuf[i]
+        // Skip skipShip up front so we don't pay the line-segment AABB cost for it.
         if (ship.id == skipShip) {
             continue
         }
-
-        var choppedFrom: Vector3d
-        var choppedTo : Vector3d
-        if (intersectType == Intersectionf.TWO_INTERSECTION) {
-            choppedFrom = ctx.from.toJOML().add(ctx.to.toJOML().sub(ctx.from.toJOML()).mul(chopParam.x))
-            choppedTo = ctx.from.toJOML().add(ctx.to.toJOML().sub(ctx.from.toJOML()).mul(chopParam.y))
-
-        } else if (intersectType == Intersectionf.ONE_INTERSECTION) {
-            // This intersection type will result in both calculations above returning the same point,
-            // and thus we need to determine which point is inside the AABB to recover.
-            if (expandedAABB.containsPoint(ctx.from.toJOML())) {
-                choppedFrom = ctx.from.toJOML()
-                choppedTo = ctx.from.toJOML().add(ctx.to.toJOML().sub(ctx.from.toJOML()).mul(chopParam.y))
-            } else {
-                choppedFrom = ctx.from.toJOML().add(ctx.to.toJOML().sub(ctx.from.toJOML()).mul(chopParam.x))
-                choppedTo = ctx.to.toJOML()
-            }
-
-        } else {
-            choppedFrom = ctx.from.toJOML()
-            choppedTo = ctx.to.toJOML()
+        val shipAabb = ship.worldAABB
+        val expandedAABB = scratch.expandedAabb
+            .setMin(shipAabb.minX() - 1.0, shipAabb.minY() - 1.0, shipAabb.minZ() - 1.0)
+            .setMax(shipAabb.maxX() + 1.0, shipAabb.maxY() + 1.0, shipAabb.maxZ() + 1.0)
+        val intersectType = expandedAABB.intersectsLineSegment(clipSegment, scratch.chopParam)
+        if (intersectType == Intersectionf.OUTSIDE) {
+            continue
         }
 
-        val worldToShip = (ship as? ClientShip)?.renderTransform?.worldToShip ?: ship.worldToShip
-        val shipToWorld = (ship as? ClientShip)?.renderTransform?.shipToWorld ?: ship.shipToWorld
-        val shipStart = worldToShip.transformPosition(ctx.from.toJOML()).toMinecraft()
-        val shipEnd = worldToShip.transformPosition(ctx.to.toJOML()).toMinecraft()
+        val clientShip = ship as? ClientShip
+        val activeTransform = clientShip?.renderTransform ?: ship.transform
+        val worldToShip = activeTransform.worldToShip
+        val shipToWorld = activeTransform.shipToWorld
+        worldToShip.transformPosition(fromV, scratch.shipStartV)
+        worldToShip.transformPosition(toV, scratch.shipEndV)
+        val shipStart = Vec3(scratch.shipStartV.x, scratch.shipStartV.y, scratch.shipStartV.z)
+        val shipEnd = Vec3(scratch.shipEndV.x, scratch.shipEndV.y, scratch.shipEndV.z)
 
         val shipHit = clip(ctx, shipStart, shipEnd)
-        val shipHitPos = shipToWorld.transformPosition(shipHit.location.toJOML()).toMinecraft()
+        val shipHitLoc = shipHit.location
+        scratch.shipHitV.set(shipHitLoc.x, shipHitLoc.y, shipHitLoc.z)
+        shipToWorld.transformPosition(scratch.shipHitV)
+        val shipHitPos = Vec3(scratch.shipHitV.x, scratch.shipHitV.y, scratch.shipHitV.z)
         val shipHitDist = shipHitPos.distanceToSqr(ctx.from)
 
         if (shipHitDist < closestHitDist && shipHit.type != HitResult.Type.MISS) {
@@ -114,6 +125,8 @@ fun Level.clipIncludeShips(
             closestHitDist = shipHitDist
         }
     }
+
+    shipBuf.clear()
 
     if (shouldTransformHitPos) {
         closestHit.location = closestHitPos
@@ -265,7 +278,12 @@ fun Level.raytraceEntities(
     val start = Vector3d()
     val end = Vector3d()
 
-    getShipsIntersecting(origBoundingBoxM.toJOML()).forEach {
+    val scratch = tmpClipScratch.get()
+    val queryAabb = scratch.clipAabb.set(origBoundingBoxM)
+    val shipBuf = scratch.shipBuf
+    getShipsIntersecting(queryAabb, shipBuf)
+    for (i in shipBuf.indices) {
+        val it = shipBuf[i]
         it.worldToShip.transformPosition(origStartVec, start)
         it.worldToShip.transformPosition(origEndVec, end)
 
@@ -273,6 +291,7 @@ fun Level.raytraceEntities(
 
         checkEntities(entities, start.toMinecraft(), end.toMinecraft(), scale)
     }
+    shipBuf.clear()
 
     return if (resultEntity == null) {
         null
@@ -327,11 +346,17 @@ fun Level.raytraceEntitiesInflated(
     val shipStart = Vector3d()
     val shipEnd = Vector3d()
 
-    getShipsIntersecting(origBoundingBoxM.toJOML()).forEach { ship ->
+    val scratch = tmpClipScratch.get()
+    val queryAabb = scratch.clipAabb.set(origBoundingBoxM)
+    val shipBuf = scratch.shipBuf
+    getShipsIntersecting(queryAabb, shipBuf)
+    for (i in shipBuf.indices) {
+        val ship = shipBuf[i]
         ship.worldToShip.transformPosition(startJoml, shipStart)
         ship.worldToShip.transformPosition(endJoml, shipEnd)
         checkEntities(entities, shipStart.toMinecraft(), shipEnd.toMinecraft(), ship)
     }
+    shipBuf.clear()
 
     return if (resultEntity == null) null else EntityHitResult(resultEntity, location)
 }

@@ -79,9 +79,9 @@ public class SodiumCompat {
     static final int FEATURE_SHIP_ON_SHIP = 8;
 
     static Map<ShaderCacheKey, GlProgram<ShipThing>> cachedPrograms = new HashMap<>();
-    private static final ThreadLocal<Matrix4f> CURRENT_TRANSFORM = new ThreadLocal<>();
-    private static final ThreadLocal<Matrix4f> CURRENT_LOCAL_TO_WORLD = new ThreadLocal<>();
-    private static final ThreadLocal<int[]> CURRENT_RENDER_ORIGIN = new ThreadLocal<>();
+    private static final ThreadLocal<Matrix4f> CURRENT_TRANSFORM = ThreadLocal.withInitial(Matrix4f::new);
+    private static final ThreadLocal<Matrix4f> CURRENT_LOCAL_TO_WORLD = ThreadLocal.withInitial(Matrix4f::new);
+    private static final ThreadLocal<int[]> CURRENT_RENDER_ORIGIN = ThreadLocal.withInitial(() -> new int[3]);
     private static final ThreadLocal<Boolean> IS_RENDERING_SHIP = ThreadLocal.withInitial(() -> false);
 
     // Texture units used for the ship light buffer textures.
@@ -119,6 +119,13 @@ public class SodiumCompat {
 
     /** Cached VS world chunk programs, keyed by sodium's render-pass options. */
     private static final Map<ChunkShaderOptions, GlProgram<WorldThing>> cachedWorldPrograms = new HashMap<>();
+
+    private static final ArrayList<ClientShip> vs$renderableShipsScratch = new ArrayList<>(64);
+    private static final ArrayList<SortedRenderLists> vs$renderableRenderListsScratch = new ArrayList<>(64);
+    private static final Vector3d vs$cameraShipSpaceScratch = new Vector3d();
+    private static final Matrix4d vs$newModelViewScratch = new Matrix4d();
+    private static final Matrix4d vs$localToCameraRelScratch = new Matrix4d();
+    private static final Matrix4f vs$newModelViewFScratch = new Matrix4f();
 
     public static VsShipLightStorage getLightStorage() {
         if (lightStorage == null) {
@@ -271,24 +278,31 @@ public class SodiumCompat {
         shipInterface.setShipOccluders(SHIP_OCCLUDER_LIST_TEXTURE_UNIT, getShipOccluderList().size());
     }
 
-    /** Stores transform for the next render() call on the current thread. */
-    public static void pushTransform(Matrix4f transform) {
-        CURRENT_TRANSFORM.set(transform);
+    public static void pushTransform(Matrix4fc transform) {
+        CURRENT_TRANSFORM.get().set(transform);
     }
 
-    /** Retrieves and clears the stored transform for this thread. */
+    public static void pushTransform(Matrix4dc transform) {
+        CURRENT_TRANSFORM.get().set(transform);
+    }
+
     public static Matrix4f popTransform() {
-        Matrix4f transform = CURRENT_TRANSFORM.get();
-        CURRENT_TRANSFORM.remove();
-        return transform;
+        return CURRENT_TRANSFORM.get();
     }
 
-    public static void pushLocalToWorld(Matrix4f m) {
-        CURRENT_LOCAL_TO_WORLD.set(m);
+    public static void pushLocalToWorld(Matrix4fc m) {
+        CURRENT_LOCAL_TO_WORLD.get().set(m);
+    }
+
+    public static void pushLocalToWorld(Matrix4dc m) {
+        CURRENT_LOCAL_TO_WORLD.get().set(m);
     }
 
     public static void pushRenderOrigin(int x, int y, int z) {
-        CURRENT_RENDER_ORIGIN.set(new int[] { x, y, z });
+        final int[] origin = CURRENT_RENDER_ORIGIN.get();
+        origin[0] = x;
+        origin[1] = y;
+        origin[2] = z;
     }
 
     public static boolean isRenderingShip() {
@@ -349,8 +363,10 @@ public class SodiumCompat {
         final boolean dynamicShipToWorld = VSGameConfig.CLIENT.getDynamicShipToWorldLighting();
         final VsShipLightStorage storage = dynamicLight ? getLightStorage() : null;
         final VsShipBiomeColorStorage biomeStorageLocal = dynamicBiome ? getBiomeStorage() : null;
-        final ArrayList<ClientShip> renderableShips = new ArrayList<>();
-        final ArrayList<SortedRenderLists> renderableRenderLists = new ArrayList<>();
+        final ArrayList<ClientShip> renderableShips = vs$renderableShipsScratch;
+        final ArrayList<SortedRenderLists> renderableRenderLists = vs$renderableRenderListsScratch;
+        renderableShips.clear();
+        renderableRenderLists.clear();
         ((RenderSectionManagerDuck) renderSectionManager).vs_getShipRenderLists().forEach((ship, renderList) -> {
             if (hasRenderableGeometryForPass(renderList, pass)) {
                 renderableShips.add((ClientShip) ship);
@@ -408,9 +424,12 @@ public class SodiumCompat {
                 RenderSystem.setShaderFogEnd(initialFogEnd * distanceScaling);
             }
 
-            final Vector3dc cameraShipSpace = shipTransform.getWorldToShip().transformPosition(new Vector3d(x, y, z));
             final Matrix4dc s = ship.getRenderTransform().getShipToWorld();
-            final Matrix4d newModelView = new Matrix4d(matrices.modelView())
+            shipTransform.getWorldToShip().transformPosition(x, y, z, vs$cameraShipSpaceScratch);
+            final Vector3dc cameraShipSpace = vs$cameraShipSpaceScratch;
+
+            final Matrix4d newModelView = vs$newModelViewScratch
+                .set(matrices.modelView())
                 .translate(-x, -y, -z)
                 .mul(s)
                 .translate(cameraShipSpace);
@@ -430,19 +449,20 @@ public class SodiumCompat {
             final int originX = (int) Math.floor(x);
             final int originY = (int) Math.floor(y);
             final int originZ = (int) Math.floor(z);
-            final Matrix4d localToCameraRel = new Matrix4d()
+            final Matrix4d localToCameraRel = vs$localToCameraRelScratch
+                .identity()
                 .translate(x - originX, y - originY, z - originZ)
                 .translate(-x, -y, -z)
                 .mul(s)
                 .translate(cameraShipSpace);
 
+            vs$newModelViewFScratch.set(newModelView);
             final ChunkRenderMatrices newMatrices =
-                new ChunkRenderMatrices(matrices.projection(), new Matrix4f(newModelView));
+                new ChunkRenderMatrices(matrices.projection(), vs$newModelViewFScratch);
             DefaultChunkRenderer chunkRenderer = (DefaultChunkRenderer) ((RenderSectionManagerAccessor) renderSectionManager).getChunkRenderer();
 
-            // Stash uniforms for the mixin's redirected begin() to consume
-            pushTransform(new Matrix4f(s));
-            pushLocalToWorld(new Matrix4f(localToCameraRel));
+            pushTransform(s);
+            pushLocalToWorld(localToCameraRel);
             pushRenderOrigin(originX, originY, originZ);
             IS_RENDERING_SHIP.set(true);
 
