@@ -56,6 +56,7 @@ import org.valkyrienskies.mod.common.block.WingBlock;
 import org.valkyrienskies.mod.common.config.DimensionParametersResolver;
 import org.valkyrienskies.mod.common.config.VSGameConfig;
 import org.valkyrienskies.mod.common.util.DragInfoReporter;
+import org.valkyrienskies.mod.common.util.FractureEventHandler;
 import org.valkyrienskies.mod.common.util.ImpactFractureHandler;
 import org.valkyrienskies.mod.common.util.VSServerLevel;
 import org.valkyrienskies.mod.common.util.VectorConversionsMCKt;
@@ -425,6 +426,7 @@ public abstract class MixinServerLevel implements IShipObjectWorldServerProvider
             ValkyrienSkiesMod.splitHandler.tick(ServerLevel.class.cast(this));
         }
         ImpactFractureHandler.INSTANCE.tick(ServerLevel.class.cast(this));
+        FractureEventHandler.INSTANCE.tick(ServerLevel.class.cast(this));
 
         DragInfoReporter.INSTANCE.tick((ServerLevel) (Object) this);
 
