@@ -27,9 +27,10 @@ class SplitHandler(private val doEdges: Boolean, private val doCorners: Boolean)
     private val splitQueue: HashMap<DimensionId, HashMap<ShipId, Int>> = hashMapOf()
 
     fun queueSplit(level: Level, shipId: ShipId?) {
+        if (shipId == null) return
         SPLITLOGGER.logger.info("[split-debug] queueSplit requested: ship=$shipId dim=${level.dimensionId}")
-        splitQueue[level.dimensionId]?.put(shipId ?: -1, VSGameConfig.SERVER.defaultSplitGraceTimer) ?: run {
-            splitQueue[level.dimensionId] = hashMapOf((shipId ?: -1) to VSGameConfig.SERVER.defaultSplitGraceTimer)
+        splitQueue[level.dimensionId]?.put(shipId, VSGameConfig.SERVER.defaultSplitGraceTimer) ?: run {
+            splitQueue[level.dimensionId] = hashMapOf(shipId to VSGameConfig.SERVER.defaultSplitGraceTimer)
         }
     }
 
