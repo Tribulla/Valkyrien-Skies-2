@@ -220,8 +220,6 @@ public abstract class MixinMinecraftServer implements IShipObjectWorldServerProv
         */
         // endregion
 
-        // endregion
-
         vsPipeline.preTickGame();
 
         // region Tell VS to unload deleted levels and update the loaded level set.
