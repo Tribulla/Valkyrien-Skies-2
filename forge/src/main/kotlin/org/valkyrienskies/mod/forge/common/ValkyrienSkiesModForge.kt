@@ -6,6 +6,7 @@ import net.minecraft.client.renderer.ShaderInstance
 import net.minecraft.commands.Commands.CommandSelection.ALL
 import net.minecraft.commands.Commands.CommandSelection.INTEGRATED
 import net.minecraft.resources.ResourceLocation
+import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.MobCategory
 import net.minecraft.world.item.CreativeModeTabs
@@ -21,6 +22,7 @@ import net.minecraftforge.event.BuildCreativeModeTabContentsEvent
 import net.minecraftforge.event.RegisterCommandsEvent
 import net.minecraftforge.event.TagsUpdatedEvent
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent
+import net.minecraftforge.event.entity.player.PlayerEvent
 import net.minecraftforge.fml.ModList
 import net.minecraftforge.fml.ModLoadingContext
 import net.minecraftforge.fml.common.Mod
@@ -80,6 +82,8 @@ import org.valkyrienskies.mod.common.item.ShipAssemblerItem
 import org.valkyrienskies.mod.common.item.ShipCreatorItem
 import org.valkyrienskies.mod.common.item.ShipRemoverItem
 import org.valkyrienskies.mod.common.item.VSBlockItem
+import org.valkyrienskies.mod.common.playerWrapper
+import org.valkyrienskies.mod.common.util.MinecraftPlayer
 import org.valkyrienskies.mod.compat.LoadedMods
 import org.valkyrienskies.mod.compat.flywheel.FlywheelCompat
 import org.valkyrienskies.mod.compat.flywheel.ShipEmbeddingManager
@@ -155,6 +159,7 @@ class ValkyrienSkiesModForge {
             }
         }
         modBus.addListener(::loadComplete)
+        forgeBus.addListener(::playerJoin)
 
         forgeBus.addListener(::registerCommands)
         forgeBus.addListener(::tagsUpdated)
@@ -378,6 +383,17 @@ class ValkyrienSkiesModForge {
 
     private fun tagsUpdated(event: TagsUpdatedEvent) {
         VSGameEvents.tagsAreLoaded.emit(Unit)
+    }
+
+    private fun playerJoin(event: PlayerEvent.PlayerLoggedInEvent) {
+        if (event.entity is ServerPlayer) {
+            val player: MinecraftPlayer = event.entity.playerWrapper
+            if (VSGameConfig.SERVER.allowBlockInfo) {
+                MassDatapackResolver.syncBlockStates(player)
+            } else {
+                MassDatapackResolver.clearBlockStates(player)
+            }
+        }
     }
 
     private fun loadComplete(event: FMLLoadCompleteEvent) {

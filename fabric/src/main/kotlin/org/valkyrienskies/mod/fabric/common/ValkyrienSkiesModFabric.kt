@@ -13,6 +13,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
 import net.fabricmc.fabric.api.event.lifecycle.v1.CommonLifecycleEvents
 import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.fabricmc.fabric.api.`object`.builder.v1.block.entity.FabricBlockEntityTypeBuilder
 import net.fabricmc.fabric.api.`object`.builder.v1.entity.FabricDefaultAttributeRegistry
 import net.fabricmc.fabric.api.resource.IdentifiableResourceReloadListener
@@ -24,6 +25,7 @@ import net.minecraft.client.renderer.entity.EntityRendererProvider.Context
 import net.minecraft.core.Registry
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.resources.ResourceLocation
+import net.minecraft.server.level.ServerPlayer
 import net.minecraft.server.packs.PackType.SERVER_DATA
 import net.minecraft.server.packs.resources.PreparableReloadListener.PreparationBarrier
 import net.minecraft.server.packs.resources.ResourceManager
@@ -82,6 +84,8 @@ import org.valkyrienskies.mod.common.item.ShipAssemblerItem
 import org.valkyrienskies.mod.common.item.ShipCreatorItem
 import org.valkyrienskies.mod.common.item.ShipRemoverItem
 import org.valkyrienskies.mod.common.item.VSBlockItem
+import org.valkyrienskies.mod.common.playerWrapper
+import org.valkyrienskies.mod.common.util.MinecraftPlayer
 import org.valkyrienskies.mod.compat.LoadedMods
 import org.valkyrienskies.mod.compat.flywheel.FlywheelCompat
 import org.valkyrienskies.mod.compat.flywheel.ShipEmbeddingManager
@@ -265,6 +269,17 @@ class ValkyrienSkiesModFabric : ModInitializer {
             event.accept(AREA_ASSEMBLER_ITEM)
             event.accept(CLASSIC_AREA_ASSEMBLER_ITEM)
             event.accept(PHYSICS_ENTITY_CREATOR_ITEM)
+        }
+
+        ServerPlayConnectionEvents.JOIN.register { handler, sender, server ->
+            if (handler.player is ServerPlayer) {
+                val player: MinecraftPlayer = handler.player.playerWrapper
+                if (VSGameConfig.SERVER.allowBlockInfo) {
+                    MassDatapackResolver.syncBlockStates(player)
+                } else {
+                    MassDatapackResolver.clearBlockStates(player)
+                }
+            }
         }
 
         CommandRegistrationCallback.EVENT.register { dispatcher ,d, _ ->

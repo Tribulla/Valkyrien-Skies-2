@@ -141,6 +141,11 @@ object VSGameConfig {
         @ConfigEntry(description = "Project ships into the world's lighting at render time so ships occlude sunlight on the ground beneath them and ship-internal torches illuminate nearby world blocks (sodium/embeddium only). Unlike the other ship-lighting options this affects the WORLD's chunks rather than ship blocks, so it applies to ALL ship renderers, the BATCHED default included. Experimental — overrides sodium's stock world-chunk shader. Disable for the default vanilla behavior where ships don't affect world lighting.")
         var dynamicShipToWorldLighting = false
 
+        @ConfigEntry(description = "Enable searching by block physical properties in JEI")
+        var jeiSearch = true
+
+        @ConfigEntry(description = "Prefix character used for searching block properties. Must be a single character!")
+        var searchPrefix = "~"
     }
 
     class Server {
@@ -395,6 +400,11 @@ object VSGameConfig {
         var minScaling = 0.25
 
         @ConfigEntry(
+            description = "If players can see block info (mass, friction, elasticity). Disabling this will also disable JEI search."
+        )
+        var allowBlockInfo = true // they call me jade because i be showin block info
+
+        @ConfigEntry(
             description = "Default mass for blocks that do not have it defined in data or code. Blocks with masses below 100 float in water"
         )
         var defaultBlockMass = 1000.0
@@ -521,6 +531,20 @@ object VSGameConfig {
                 max = 4.0
             )
             var configCommandPerms = 2
+
+            @ConfigEntry(
+                description = "The permission level required to use the /vs gravity command",
+                min = 0.0,
+                max = 4.0
+            )
+            var setGravityCommandPerms = 2
+
+            @ConfigEntry(
+                description = "The permission level required to use the /vs splitting command",
+                min = 0.0,
+                max = 4.0
+            )
+            var setSplittingCommandPerms = 2
         }
     }
 
