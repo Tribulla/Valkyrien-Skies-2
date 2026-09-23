@@ -249,7 +249,7 @@ public abstract class MixinEntity implements IEntityDraggingInformationProvider 
                 : ship.getTransform();
             final Vector3dc renderPosition = shipTransform.getShipToWorld()
                 .transformPosition(mountedTo.getMountPosInShip(), new Vector3d());
-            cir.setReturnValue(shouldRenderAtSqrDistance(vs$distanceToSqr(renderPosition, d, e, f)));
+            cir.setReturnValue(shouldRenderAtSqrDistance(renderPosition.distanceSquared(d, e, f)));
             return;
         }
 
@@ -261,19 +261,10 @@ public abstract class MixinEntity implements IEntityDraggingInformationProvider 
                 if (relativePosition != null) {
                     final Vector3dc renderPosition = shipTransform.getShipToWorld()
                         .transformPosition(relativePosition, new Vector3d());
-                    cir.setReturnValue(shouldRenderAtSqrDistance(vs$distanceToSqr(renderPosition, d, e, f)));
+                    cir.setReturnValue(shouldRenderAtSqrDistance(renderPosition.distanceSquared(d, e, f)));
                 }
             }
         }
-    }
-
-    @Unique
-    private static double vs$distanceToSqr(final Vector3dc position, final double x, final double y,
-        final double z) {
-        final double dx = position.x() - x;
-        final double dy = position.y() - y;
-        final double dz = position.z() - z;
-        return dx * dx + dy * dy + dz * dz;
     }
 
     // region shadow functions and fields
