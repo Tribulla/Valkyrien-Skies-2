@@ -8,6 +8,9 @@ import org.valkyrienskies.core.api.events.FractureEvent
 import org.valkyrienskies.core.api.events.FractureReason
 import org.valkyrienskies.core.api.ships.properties.ShipId
 import org.valkyrienskies.core.api.world.properties.DimensionId
+import org.valkyrienskies.core.impl.api_impl.config.ConfigFracturingMode
+import org.valkyrienskies.core.impl.api_impl.config.ConfigPhysicsBackendType
+import org.valkyrienskies.core.impl.config.VSCoreConfig
 import org.valkyrienskies.mod.common.assembly.ShipAssembler
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.util.logger
@@ -19,6 +22,14 @@ object FractureEventHandler {
 
     var enabled: Boolean = true
 
+    private fun isFracturingActive(): Boolean {
+        if (!enabled) return false
+        val backend = VSCoreConfig.SERVER.physics.physicsBackend
+        val isFracturingBackend = backend == ConfigPhysicsBackendType.KRUNCH_KONSTANT ||
+            backend == ConfigPhysicsBackendType.KRUNCH_VOX3D
+        return isFracturingBackend && VSCoreConfig.SERVER.physics.fracturing != ConfigFracturingMode.OFF
+    }
+
     private data class PendingFracture(
         val parentShipId: ShipId,
         val cells: List<Vector3ic>,
@@ -29,7 +40,7 @@ object FractureEventHandler {
 
     @JvmStatic
     fun onFracture(event: FractureEvent) {
-        if (!enabled) return
+        if (!isFracturingActive()) return
         if (event.cells.isEmpty()) return
         val cellsCopy = event.cells.map { Vector3i(it) as Vector3ic }
         val q = queues.computeIfAbsent(event.dimensionId) { ConcurrentLinkedQueue() }
@@ -38,7 +49,10 @@ object FractureEventHandler {
 
     @JvmStatic
     fun tick(level: ServerLevel) {
-        if (!enabled) return
+        if (!isFracturingActive()) {
+            if (queues.isNotEmpty()) queues.clear()
+            return
+        }
         val q = queues[level.dimensionId] ?: return
 
         val pending = ArrayList<PendingFracture>()

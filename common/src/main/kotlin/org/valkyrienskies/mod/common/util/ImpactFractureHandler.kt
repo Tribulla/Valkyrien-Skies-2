@@ -9,6 +9,9 @@ import org.valkyrienskies.core.api.events.CollisionEvent
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.core.api.ships.properties.ShipId
 import org.valkyrienskies.core.api.world.properties.DimensionId
+import org.valkyrienskies.core.impl.api_impl.config.ConfigFracturingMode
+import org.valkyrienskies.core.impl.api_impl.config.ConfigPhysicsBackendType
+import org.valkyrienskies.core.impl.config.VSCoreConfig
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.assembly.ShipAssembler
 import org.valkyrienskies.mod.common.dimensionId
@@ -30,6 +33,14 @@ object ImpactFractureHandler {
 
     var maxCarveRadius: Int = 3
 
+    private fun isFracturingActive(): Boolean {
+        if (!enabled) return false
+        val backend = VSCoreConfig.SERVER.physics.physicsBackend
+        val isFracturingBackend = backend == ConfigPhysicsBackendType.KRUNCH_KONSTANT ||
+            backend == ConfigPhysicsBackendType.KRUNCH_VOX3D
+        return isFracturingBackend && VSCoreConfig.SERVER.physics.fracturing != ConfigFracturingMode.OFF
+    }
+
     private val CARVE_FLAGS = Block.UPDATE_CLIENTS or Block.UPDATE_KNOWN_SHAPE or
         Block.UPDATE_SUPPRESS_DROPS or Block.UPDATE_MOVE_BY_PISTON
 
@@ -44,7 +55,7 @@ object ImpactFractureHandler {
 
     @JvmStatic
     fun onCollision(event: CollisionEvent) {
-        if (!enabled) return
+        if (!isFracturingActive()) return
         var worstApproach = 0.0
         var worstPoint: Vector3d? = null
         for (contact in event.contactPoints) {
@@ -64,7 +75,10 @@ object ImpactFractureHandler {
 
     @JvmStatic
     fun tick(level: ServerLevel) {
-        if (!enabled) return
+        if (!isFracturingActive()) {
+            if (queues.isNotEmpty()) queues.clear()
+            return
+        }
         val q = queues[level.dimensionId] ?: return
         while (true) {
             val impact = q.poll() ?: break

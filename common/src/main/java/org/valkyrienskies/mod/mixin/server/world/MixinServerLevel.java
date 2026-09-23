@@ -46,6 +46,8 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip;
 import org.valkyrienskies.core.api.ships.Wing;
 import org.valkyrienskies.core.api.ships.WingManager;
 import org.valkyrienskies.core.api.util.AerodynamicUtils;
+import org.valkyrienskies.core.impl.api_impl.config.ConfigFracturingMode;
+import org.valkyrienskies.core.impl.api_impl.config.ConfigPhysicsBackendType;
 import org.valkyrienskies.core.impl.config.VSCoreConfig;
 import org.valkyrienskies.core.internal.world.VsiServerShipWorld;
 import org.valkyrienskies.core.internal.world.chunks.VsiTerrainUpdate;
@@ -439,8 +441,17 @@ public abstract class MixinServerLevel implements IShipObjectWorldServerProvider
         if (VSCoreConfig.SERVER.getSp().getEnableSplitting()) {
             ValkyrienSkiesMod.splitHandler.tick(ServerLevel.class.cast(this));
         }
-        ImpactFractureHandler.INSTANCE.tick(ServerLevel.class.cast(this));
-        FractureEventHandler.INSTANCE.tick(ServerLevel.class.cast(this));
+        final ConfigPhysicsBackendType backend = VSCoreConfig.SERVER.getPhysics().getPhysicsBackend();
+        final boolean isFracturingBackend = backend == ConfigPhysicsBackendType.KRUNCH_KONSTANT
+            || backend == ConfigPhysicsBackendType.KRUNCH_VOX3D;
+        if (isFracturingBackend && VSCoreConfig.SERVER.getPhysics().getFracturing() != ConfigFracturingMode.OFF) {
+            if (ImpactFractureHandler.INSTANCE.getEnabled()) {
+                ImpactFractureHandler.INSTANCE.tick(ServerLevel.class.cast(this));
+            }
+            if (FractureEventHandler.INSTANCE.getEnabled()) {
+                FractureEventHandler.INSTANCE.tick(ServerLevel.class.cast(this));
+            }
+        }
 
         DragInfoReporter.INSTANCE.tick((ServerLevel) (Object) this);
 
