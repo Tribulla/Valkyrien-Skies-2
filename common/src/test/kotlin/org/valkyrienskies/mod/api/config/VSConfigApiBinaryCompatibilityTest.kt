@@ -15,6 +15,6 @@ class VSConfigApiBinaryCompatibilityTest {
             "Lnet/minecraftforge/common/ForgeConfigSpec\$Builder;Lkotlin/jvm/functions/Function2;)" +
             "Lnet/minecraftforge/common/ForgeConfigSpec\$Builder;"
 
-        assertTrue(classFile.contains(legacyDescriptor), "Missing Eureka-compatible buildForgeConfigSpec overload")
+        assertTrue(classFile.contains(legacyDescriptor), "Missing Legacy-compatible buildForgeConfigSpec overload")
     }
 }
