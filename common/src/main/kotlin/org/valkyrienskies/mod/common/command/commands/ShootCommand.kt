@@ -60,7 +60,9 @@ object ShootCommand {
                                             val id = ResourceLocationArgument.getId(ctx, "material")
                                             val block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null)
                                             if (block == null) {
-                                                ctx.source.sendFailure(Component.literal("Unknown block: $id"))
+                                                ctx.source.sendFailure(
+                                                    Component.translatable("command.valkyrienskies.shoot.unknown_block", id)
+                                                )
                                                 return@executes 0
                                             }
                                             shoot(
@@ -82,7 +84,7 @@ object ShootCommand {
         val shooter = source.entity
         if (shooter == null) {
             source.sendFailure(
-                Component.literal("/vs shoot must be run by an entity (it fires from your eyes along your look direction).")
+                Component.translatable("command.valkyrienskies.shoot.must_be_entity")
             )
             return 0
         }
@@ -133,11 +135,17 @@ object ShootCommand {
 
         val id = BuiltInRegistries.BLOCK.getKey(block)
         source.sendSuccess({
-            val base = "Fired ${size}x${size}x${size} $id ship #${ship.id} at ${"%.1f".format(speed)} m/s"
+            val formattedSpeed = "%.1f".format(speed)
             if (speed < IMPACT_GATE_MPS) {
-                Component.literal("$base  (note: impact fracture needs ~${IMPACT_GATE_MPS.toInt()}+ m/s to trigger)")
+                Component.translatable(
+                    "command.valkyrienskies.shoot.success.impact_note",
+                    size, size, size, id, ship.id, formattedSpeed, IMPACT_GATE_MPS.toInt()
+                )
             } else {
-                Component.literal(base)
+                Component.translatable(
+                    "command.valkyrienskies.shoot.success",
+                    size, size, size, id, ship.id, formattedSpeed
+                )
             }
         }, true)
         return 1
