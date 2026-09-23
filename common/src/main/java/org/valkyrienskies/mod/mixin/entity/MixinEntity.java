@@ -241,20 +241,39 @@ public abstract class MixinEntity implements IEntityDraggingInformationProvider 
      */
     @Inject(method = "shouldRender", at = @At("HEAD"), cancellable = true)
     private void onShouldRender(double d, double e, double f, CallbackInfoReturnable<Boolean> cir) {
+        final ShipMountedToData mountedTo = VSGameUtilsKt.getShipMountedToData(Entity.class.cast(this), null);
+        if (mountedTo != null) {
+            final LoadedShip ship = mountedTo.getShipMountedTo();
+            final ShipTransform shipTransform = ship instanceof ClientShip
+                ? ((ClientShip) ship).getRenderTransform()
+                : ship.getTransform();
+            final Vector3dc renderPosition = shipTransform.getShipToWorld()
+                .transformPosition(mountedTo.getMountPosInShip(), new Vector3d());
+            cir.setReturnValue(shouldRenderAtSqrDistance(vs$distanceToSqr(renderPosition, d, e, f)));
+            return;
+        }
+
         if (this.draggingInformation.isEntityBeingDraggedByAShip()) {
             final Ship ship = VSGameUtilsKt.getShipObjectWorld(this.level).getAllShips().getById(this.draggingInformation.getLastShipStoodOn());
             if (ship != null) {
                 final ShipTransform shipTransform = (ship instanceof ClientShip ? ((ClientShip) ship).getRenderTransform() : ship.getTransform());
-                if (this.draggingInformation.getRelativePositionOnShip() != null) {
-                    Vector3dc redir = shipTransform.getShipToWorld().transformPosition(this.draggingInformation.getRelativePositionOnShip(), new Vector3d());
-                    double distX = redir.x() - d;
-                    double distY = redir.y() - e;
-                    double distZ = redir.z() - f;
-                    double sqrDist = distX * distX + distY * distY + distZ * distZ;
-                    cir.setReturnValue(shouldRenderAtSqrDistance(sqrDist));
+                final Vector3dc relativePosition = this.draggingInformation.bestRelativeEntityPosition();
+                if (relativePosition != null) {
+                    final Vector3dc renderPosition = shipTransform.getShipToWorld()
+                        .transformPosition(relativePosition, new Vector3d());
+                    cir.setReturnValue(shouldRenderAtSqrDistance(vs$distanceToSqr(renderPosition, d, e, f)));
                 }
             }
         }
+    }
+
+    @Unique
+    private static double vs$distanceToSqr(final Vector3dc position, final double x, final double y,
+        final double z) {
+        final double dx = position.x() - x;
+        final double dy = position.y() - y;
+        final double dz = position.z() - z;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     // region shadow functions and fields

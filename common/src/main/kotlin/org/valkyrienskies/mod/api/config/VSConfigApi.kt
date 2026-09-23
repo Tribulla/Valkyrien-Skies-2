@@ -40,6 +40,19 @@ object VSConfigApi {
     }
 
     @JvmStatic
+    @JvmName("buildForgeConfigSpec")
+    fun buildForgeConfigSpecCompat(
+        configCategory: VsiConfigModelCategory,
+        builder: ForgeConfigSpec.Builder,
+        forgeConfigValueConsumer: (String, ForgeConfigSpec.ConfigValue<*>) -> Unit
+    ): ForgeConfigSpec.Builder = buildForgeConfigSpec(
+        configCategory,
+        builder,
+        forgeConfigValueConsumer,
+        emptyList()
+    )
+
+    @JvmStatic
     @JvmName("buildForgeConfigSpec\$default")
     @Suppress("UNUSED_PARAMETER")
     fun buildForgeConfigSpecDefaultCompat(

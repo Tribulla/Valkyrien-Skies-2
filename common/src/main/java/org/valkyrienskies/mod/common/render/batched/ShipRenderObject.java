@@ -83,6 +83,7 @@ public final class ShipRenderObject implements AutoCloseable {
         synchronized (dirtySections) {
             dirtySections.add(SectionPos.asLong(sx, sy, sz));
         }
+        blockEntitiesDirty = true;
         emittersDirty = true;
     }
 
