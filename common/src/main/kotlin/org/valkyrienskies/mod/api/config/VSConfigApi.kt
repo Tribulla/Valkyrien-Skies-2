@@ -39,6 +39,10 @@ object VSConfigApi {
         return builder
     }
 
+    /**
+     * Binary-compatibility overload for addons compiled before the path-aware config API was added.
+     */
+    @Deprecated("Binary-compatibility overload for addons compiled before the path-aware config API was added.")
     @JvmStatic
     @JvmName("buildForgeConfigSpec")
     fun buildForgeConfigSpecCompat(
@@ -52,6 +56,7 @@ object VSConfigApi {
         emptyList()
     )
 
+    @Deprecated("Binary-compatibility overload for addons compiled before the path-aware config API was added.")
     @JvmStatic
     @JvmName("buildForgeConfigSpec\$default")
     @Suppress("UNUSED_PARAMETER")
